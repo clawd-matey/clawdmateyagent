@@ -223,7 +223,8 @@ def bridge_weth_to_arbitrum(account, amount_wei):
            f"?inputToken={weth_base}&outputToken={weth_arb}"
            f"&originChainId=8453&destinationChainId=42161"
            f"&amount={amount_wei}&recipient={account.address}")
-    resp = json.loads(urllib.request.urlopen(urllib.request.Request(url), timeout=15).read())
+    req = urllib.request.Request(url, headers={"User-Agent": "RedBotster/1.0", "Accept": "application/json"})
+    resp = json.loads(urllib.request.urlopen(req, timeout=15).read())
 
     total_fee    = int(resp["totalRelayFee"]["total"])
     output_amt   = amount_wei - total_fee
@@ -264,7 +265,7 @@ def bridge_weth_to_arbitrum(account, amount_wei):
     # Poll Arbitrum until WETH arrives (timeout 3 min)
     w3_arb, _ = connect("arbitrum")
     weth_arb_c = w3_arb.eth.contract(address=Web3.to_checksum_address(weth_arb), abi=ERC20_ABI)
-    deadline = time.time() + 180
+    deadline = time.time() + 300  # 5 minute timeout
     while time.time() < deadline:
         bal = weth_arb_c.functions.balanceOf(account.address).call()
         if bal >= output_amt:
