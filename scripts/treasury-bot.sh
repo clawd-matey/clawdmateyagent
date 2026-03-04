@@ -293,6 +293,37 @@ log "Claimed: $CLAIMED_WETH WETH + YARR (accumulated)"
 log "YARR burned: $YARR_BURNED | WETH diversified: \$$SWAP_USD | WETH Reserve: \$$WETH_RESERVE"
 log "Tokens (RED, WBTC, CLAWD) sent to clawd-matey.eth"
 
+# ── Tweet update ──────────────────────────────────────────────────────────────
+if [ "$DRY_RUN" = "false" ]; then
+  # Format YARR amount nicely (millions)
+  YARR_MILLIONS=$(echo "$CLAIMABLE_YARR" | awk '{printf "%.1fM", $1/1000000}')
+  
+  # Build tweet
+  TWEET="🏴‍☠️ Treasury update
+
+Claimed: ${YARR_MILLIONS} \$YARR"
+  
+  [ "$CLAIMED_WETH" != "0" ] && TWEET="$TWEET + $CLAIMED_WETH WETH (~\$$CLAIMED_USD)"
+  
+  TWEET="$TWEET
+→ YARR sent to treasury"
+  
+  [ "$YARR_BURNED" != "0" ] && TWEET="$TWEET
+🔥 Burned: $YARR_BURNED YARR"
+  
+  [ "$BOUGHT" -gt 0 ] && TWEET="$TWEET
+→ WETH split: RED, WBTC, CLAWD"
+  
+  log "Tweeting update..."
+  TWEET_RESULT=$(bird tweet "$TWEET" 2>&1 || true)
+  
+  if echo "$TWEET_RESULT" | grep -qiE "(posted|success|tweet.*id)"; then
+    log "✅ Tweeted update"
+  else
+    log "⚠️ Tweet may have failed: $(echo "$TWEET_RESULT" | tail -3)"
+  fi
+fi
+
 # ── Step 9: Update TRANSACTIONS.md and push to GitHub ─────────────────────────
 if [ "$DRY_RUN" = "false" ]; then
   REPO_DIR="$(dirname "$SCRIPT_DIR")"
