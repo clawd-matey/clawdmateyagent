@@ -91,33 +91,21 @@ log "Claimed: \$$CLAIMED_USD"
 SPLIT_USD=$(echo "$CLAIMED_USD" | awk '{printf "%.2f", $1 / 5}')
 log "Split: \$$SPLIT_USD each to RED, GRT, WBTC, CLAWD, YARR"
 
-# ── Step 5: Buy portfolio tokens ──────────────────────────────────────────────
-buy_token() {
-  local name="$1"
-  local token="$2"
-  local chain="$3"
-  local amount="$4"
-  
-  if [ "$DRY_RUN" = "true" ]; then
-    log "[DRY RUN] Would buy \$$amount of $name on $chain"
-    return
-  fi
-  
-  log "Buying \$$amount of $name on $chain..."
-  local result
-  if [ "$chain" = "Arbitrum" ]; then
-    result=$(bankr "Buy exactly \$$amount worth of $name ($token) on Arbitrum. Bridge WETH from Base if needed. Execute now." 2>&1 || true)
-  else
-    result=$(bankr "Buy exactly \$$amount worth of $name ($token) on Base using WETH. Execute via Clanker pool if available." 2>&1 || true)
-  fi
-  log "$name buy result: $(echo "$result" | tail -5)"
-}
+# ── Step 5: Buy portfolio tokens (batched single call) ───────────────────────
+if [ "$DRY_RUN" = "true" ]; then
+  log "[DRY RUN] Would buy \$$SPLIT_USD each of RED, GRT, WBTC, CLAWD, YARR"
+else
+  log "Buying all 5 tokens in single batch..."
+  BUY_RESULT=$(bankr "Execute these 5 buys using WETH on Base:
+1. Buy \$$SPLIT_USD of RED ($RED_TOKEN) on Base
+2. Buy \$$SPLIT_USD of GRT ($GRT_TOKEN) on Arbitrum (bridge if needed)
+3. Buy \$$SPLIT_USD of WBTC ($WBTC_TOKEN) on Base
+4. Buy \$$SPLIT_USD of CLAWD ($CLAWD_TOKEN) on Base
+5. Buy \$$SPLIT_USD of YARR ($YARR_TOKEN) on Base
 
-buy_token "RED" "$RED_TOKEN" "Base" "$SPLIT_USD"
-buy_token "GRT" "$GRT_TOKEN" "Arbitrum" "$SPLIT_USD"
-buy_token "WBTC" "$WBTC_TOKEN" "Base" "$SPLIT_USD"
-buy_token "CLAWD" "$CLAWD_TOKEN" "Base" "$SPLIT_USD"
-buy_token "YARR" "$YARR_TOKEN" "Base" "$SPLIT_USD"
+Execute all 5 transactions. Use Clanker pools where available. Report results." 2>&1 || true)
+  log "Batch buy result: $(echo "$BUY_RESULT" | tail -10)"
+fi
 
 log "═══ TREASURY BOT COMPLETE ═══"
 log "Claimed: \$$CLAIMED_USD | Split: \$$SPLIT_USD x5"
