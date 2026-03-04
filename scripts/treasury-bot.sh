@@ -538,9 +538,16 @@ if [ "$DRY_RUN" = "false" ]; then
   YARR_NOTE=""
   [ "$YARR_TRANSFERRED" = "yes" ] && YARR_NOTE=" | YARR → treasury ✅"
   
+  # Creator cut info
+  CREATOR_CUT_NOTE=""
+  if [ -n "$WETH_TO_CREATOR" ] && [ "$WETH_TO_CREATOR" != "0" ]; then
+    CREATOR_CUT_NOTE="
+**Creator (20%):** $CREATOR_WETH WETH + $YARR_TO_CREATOR YARR → [0xFeb1...](https://basescan.org/address/$CREATOR_PAYOUT_WALLET)"
+  fi
+
   ENTRY="### Run: $TIME
-**Claimed:** $CLAIMED_WETH WETH + YARR$YARR_NOTE$BURN_NOTE  
-**WETH Split:** ~\$$TOTAL_USD → \$$SPLIT_USD each to RED/WBTC/CLAWD  
+**Claimed:** $CLAIMED_WETH WETH + YARR$BURN_NOTE$CREATOR_CUT_NOTE  
+**Treasury (80%):** $SPLIT_WETH WETH each → RED/WBTC/CLAWD + reserve  
 **Claim Tx:** [${CLAIM_TX:0:9}...](https://basescan.org/tx/$CLAIM_TX)  
 **Buys:** $BOUGHT/3 | **Transfers:** $TRANSFERRED/3 | **Status:** $STATUS
 
