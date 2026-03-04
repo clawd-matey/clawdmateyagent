@@ -437,7 +437,7 @@ CLAWD \$${TREASURY_CLAWD_USD} | WBTC \$${TREASURY_WBTC_USD}
 
 📊 Today: +${DAY_YARR_FMT} YARR +${DAY_WETH_FMT} WETH
 
-@scallywaglabs @redbotster @claboratories"
+@scallywaglabs @redbotster @claboratories @cryptomastery_ @marcus_rein_"
   
   log "Tweeting update..."
   TWEET_RESULT=$(bird tweet "$TWEET" 2>&1 || true)
