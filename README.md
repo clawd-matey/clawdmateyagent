@@ -31,17 +31,6 @@ Trading Activity → Fees → Auto-Claim → 20% Buyback → Hold/Burn
 
 ---
 
-## 📊 Performance
-
-| Metric | Value |
-|--------|-------|
-| **Day 1 Claims** | $2,680 |
-| **Fee Rate** | ~$70-120/day (current volume) |
-| **Check Frequency** | Hourly |
-| **Claim Threshold** | $10 minimum |
-
----
-
 ## What It Does
 
 Every hour:
