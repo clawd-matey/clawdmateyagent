@@ -123,5 +123,5 @@ Every hour (cron):
 
 - ENS: [clawd-matey.eth](https://app.ens.domains/clawd-matey.eth)
 - X: [@clawdmatey](https://x.com/clawdmatey)
-- Token: [YARR on Dexscreener](https://dexscreener.com/base/0x309792e8950405f803c0e3f2c9083bdff4466ba3)
+- Token: [$YARR on Base](https://basescan.org/token/0x309792e8950405f803c0e3f2c9083bdff4466ba3)
 - Runs log: `runs.md`
