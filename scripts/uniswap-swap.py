@@ -92,6 +92,7 @@ TOKENS = {
     "WBTC":  {"chain": "base",     "address": "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c", "decimals": 8},
     "YARR":  {"chain": "base",     "address": "0x309792e8950405f803c0e3f2c9083bdff4466ba3", "decimals": 18},
     "CLAWD": {"chain": "base",     "address": "0x9f86dB9fc6f7c9408e8Fda3Ff8ce4e78ac7a6b07", "decimals": 18},
+    "WETH":  {"chain": "base",     "address": "0x4200000000000000000000000000000000000006", "decimals": 18},
 }
 
 # tokenIn options (per chain) — these are the spending tokens

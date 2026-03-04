@@ -24,12 +24,15 @@ MIN_THRESHOLD_USD=10
 # Public treasury wallet (clawd-matey.eth)
 TREASURY_WALLET="0xdb784e1Dce8b11CC45b5228E9Ae48B03bDeFD1D9"
 
+# Creator wallet (Marcus) — gets 20% of WETH and 20% of YARR
+CREATOR_PAYOUT_WALLET="0xFeb1DBD80Af3266062d5a5e928f9dC1FBbBe9502"
+CREATOR_PCT=20  # Percentage to creator
+
 # Portfolio tokens (all Base native)
 RED_TOKEN="0x2e662015a501f066e043d64d04f77ffe551a4b07"
 WBTC_TOKEN="0x0555E30da8f98308EdB960aa94C0Db47230d2B9c"
 CLAWD_TOKEN="0x9f86dB9fc6f7c9408e8Fda3Ff8ce4e78ac7a6b07"
-# YARR = accumulated, burned if > 5% supply
-# Split WETH: 25% RED, 25% WBTC, 25% CLAWD, 25% WETH reserve
+# Split: 20% creator, then 20% each RED/WBTC/CLAWD/reserve from remainder
 
 # Burn address (standard dead address)
 BURN_ADDRESS="0x000000000000000000000000000000000000dEaD"
@@ -113,19 +116,46 @@ fi
 CLAIMED_USD=$(echo "$CLAIMED_WETH $ETH_PRICE" | awk '{printf "%.2f", $1 * $2}')
 log "Claimed WETH: \$$CLAIMED_USD"
 
-# ── Step 4: Transfer claimed YARR to treasury ─────────────────────────────────
-YARR_TRANSFERRED="0"
+# ── Step 4: Split YARR — 20% to creator, 80% to treasury ──────────────────────
+YARR_TO_CREATOR="0"
+YARR_TO_TREASURY="0"
+
+# Get YARR balance in hot wallet
+HOT_WALLET=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" balance --token YARR 2>&1 | grep -oE '"balance":\s*[0-9.]+' | grep -oE '[0-9.]+' || echo "0")
+log "YARR in hot wallet: $HOT_WALLET"
+
 if [ "$DRY_RUN" = "true" ]; then
-  log "[DRY RUN] Would transfer claimed YARR to treasury"
+  CREATOR_YARR=$(echo "$HOT_WALLET $CREATOR_PCT" | awk '{printf "%.0f", $1 * $2 / 100}')
+  TREASURY_YARR=$(echo "$HOT_WALLET $CREATOR_YARR" | awk '{printf "%.0f", $1 - $2}')
+  log "[DRY RUN] Would send $CREATOR_YARR YARR (20%) to creator ($CREATOR_PAYOUT_WALLET)"
+  log "[DRY RUN] Would send $TREASURY_YARR YARR (80%) to treasury ($TREASURY_WALLET)"
 else
-  log "Transferring all YARR to treasury (clawd-matey.eth)..."
-  YARR_TRANSFER=$(bankr "Send all my YARR ($YARR_TOKEN) on Base to $TREASURY_WALLET (clawd-matey.eth). Execute the transfer." 2>&1 || true)
-  
-  if echo "$YARR_TRANSFER" | grep -qiE "(tx|transaction|hash|success|sent|0x[a-f0-9]{64})"; then
-    log "✅ YARR transferred to treasury"
-    YARR_TRANSFERRED="yes"
+  if [ "$HOT_WALLET" != "0" ] && [ -n "$HOT_WALLET" ]; then
+    # Calculate split
+    CREATOR_YARR=$(echo "$HOT_WALLET $CREATOR_PCT" | awk '{printf "%.0f", $1 * $2 / 100}')
+    TREASURY_YARR=$(echo "$HOT_WALLET $CREATOR_YARR" | awk '{printf "%.0f", $1 - $2}')
+    
+    # Send 20% to creator
+    log "Sending $CREATOR_YARR YARR (20%) to creator..."
+    CREATOR_RESULT=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" transfer --token YARR --to "$CREATOR_PAYOUT_WALLET" --amount "$CREATOR_YARR" 2>&1 || true)
+    if echo "$CREATOR_RESULT" | grep -qE '"status":\s*"completed"'; then
+      log "✅ YARR to creator completed"
+      YARR_TO_CREATOR="$CREATOR_YARR"
+    else
+      log "⚠️ YARR to creator failed: $(echo "$CREATOR_RESULT" | tail -2)"
+    fi
+    
+    # Send remaining 80% to treasury
+    log "Sending remaining YARR (80%) to treasury..."
+    TREASURY_RESULT=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" transfer --token YARR --to "$TREASURY_WALLET" --amount all 2>&1 || true)
+    if echo "$TREASURY_RESULT" | grep -qE '"status":\s*"completed"'; then
+      log "✅ YARR to treasury completed"
+      YARR_TO_TREASURY="yes"
+    else
+      log "⚠️ YARR to treasury failed: $(echo "$TREASURY_RESULT" | tail -2)"
+    fi
   else
-    log "⚠️ YARR transfer may have failed: $(echo "$YARR_TRANSFER" | tail -3)"
+    log "No YARR to transfer"
   fi
 fi
 
@@ -203,17 +233,39 @@ else
   fi
 fi
 
-# ── Step 6: Calculate splits (25% each: RED, WBTC, CLAWD, WETH reserve) ───────
-# Using only WETH for diversification (YARR is accumulated separately)
+# ── Step 6: Split WETH — 20% to creator, then 20% each to RED/WBTC/CLAWD/reserve
 TOTAL_WETH="$CLAIMED_WETH"
 TOTAL_USD="$CLAIMED_USD"
-SWAP_USD=$(echo "$TOTAL_USD" | awk '{printf "%.2f", $1 * 0.75}')
-SPLIT_USD=$(echo "$TOTAL_USD" | awk '{printf "%.2f", $1 / 4}')
-WETH_RESERVE=$(echo "$TOTAL_USD" | awk '{printf "%.2f", $1 * 0.25}')
 
-# Calculate WETH amounts for each token (25% each)
-SPLIT_WETH=$(echo "$TOTAL_WETH" | awk '{printf "%.6f", $1 / 4}')
-log "Split: $SPLIT_WETH WETH (~\$$SPLIT_USD) each to RED, WBTC, CLAWD | $SPLIT_WETH WETH reserve"
+# Calculate creator's 20% cut
+CREATOR_WETH=$(echo "$TOTAL_WETH $CREATOR_PCT" | awk '{printf "%.6f", $1 * $2 / 100}')
+CREATOR_WETH_USD=$(echo "$TOTAL_USD $CREATOR_PCT" | awk '{printf "%.2f", $1 * $2 / 100}')
+
+# Remaining 80% split 4 ways (20% each of total = RED, WBTC, CLAWD, reserve)
+SPLIT_WETH=$(echo "$TOTAL_WETH" | awk '{printf "%.6f", $1 * 0.20}')
+SPLIT_USD=$(echo "$TOTAL_USD" | awk '{printf "%.2f", $1 * 0.20}')
+WETH_RESERVE="$SPLIT_USD"
+
+log "Creator cut: $CREATOR_WETH WETH (~\$$CREATOR_WETH_USD)"
+log "Split: $SPLIT_WETH WETH (~\$$SPLIT_USD) each to RED, WBTC, CLAWD + reserve"
+
+# Send creator's WETH cut
+WETH_TO_CREATOR="0"
+if [ "$DRY_RUN" = "true" ]; then
+  log "[DRY RUN] Would send $CREATOR_WETH WETH to creator ($CREATOR_PAYOUT_WALLET)"
+else
+  if [ "$(echo "$CREATOR_WETH > 0" | bc -l)" = "1" ]; then
+    log "Sending $CREATOR_WETH WETH to creator..."
+    # Need to unwrap WETH to ETH first, then send (or send WETH directly)
+    WETH_SEND=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" transfer --token WETH --to "$CREATOR_PAYOUT_WALLET" --amount "$CREATOR_WETH" 2>&1 || true)
+    if echo "$WETH_SEND" | grep -qE '"status":\s*"completed"'; then
+      log "✅ WETH to creator completed"
+      WETH_TO_CREATOR="$CREATOR_WETH"
+    else
+      log "⚠️ WETH to creator failed: $(echo "$WETH_SEND" | tail -2)"
+    fi
+  fi
+fi
 
 # ── Step 7: Buy portfolio tokens via uniswap-swap.py (direct, no LLM) ─────────
 buy_token() {
