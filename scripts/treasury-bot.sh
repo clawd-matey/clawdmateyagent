@@ -14,6 +14,9 @@ set -uo pipefail
 # Note: removed -e to allow individual command failures without exiting
 
 # ── Config ────────────────────────────────────────────────────────────────────
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON="$REPO_ROOT/.venv/bin/python3"
+
 CREATOR_WALLET="0x8b59a7e24386d2265e9dfd6de59b4a6bbd5d1633"
 YARR_TOKEN="0x309792e8950405f803c0e3f2c9083bdff4466ba3"
 MIN_THRESHOLD_USD=10
@@ -218,7 +221,7 @@ buy_token() {
   local WETH_AMOUNT=$2
   
   log "Buying $TOKEN_NAME with $WETH_AMOUNT WETH via uniswap-swap.py..."
-  local RESULT=$(python3 "$SCRIPT_DIR/uniswap-swap.py" swap --token-in WETH --token-out "$TOKEN_NAME" --amount "$WETH_AMOUNT" 2>&1)
+  local RESULT=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" swap --token-in WETH --token-out "$TOKEN_NAME" --amount "$WETH_AMOUNT" 2>&1)
   local EXIT_CODE=$?
   
   log "Swap output: $RESULT"
@@ -270,7 +273,7 @@ transfer_token() {
   local TOKEN_NAME=$1
   
   log "Transferring all $TOKEN_NAME to treasury via uniswap-swap.py..."
-  local RESULT=$(python3 "$SCRIPT_DIR/uniswap-swap.py" transfer --token "$TOKEN_NAME" --to "$TREASURY_WALLET" --amount all 2>&1)
+  local RESULT=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" transfer --token "$TOKEN_NAME" --to "$TREASURY_WALLET" --amount all 2>&1)
   local EXIT_CODE=$?
   
   log "Transfer output: $RESULT"
