@@ -38,14 +38,17 @@ bankr "Claim all unclaimed fees from LpLockerv2 for YARR token (0x309792e8950405
 | v4 ClankerFeeLocker | YARR is v3, not v4 |
 | Direct LpLockerv2 calls | Need Bankr as intermediary |
 
-## Portfolio Diversification
+## Portfolio Diversification (Stability-First Strategy)
 
-After claiming, split 20% each into:
-- **RED** (`0x2e662015a501f066e043d64d04f77ffe551a4b07`) — Base
-- **GRT** (`0x9623063377AD1B27544C965cCd7342f7EA7e88C7`) — Arbitrum
-- **WBTC** (`0x0555E30da8f98308EdB960aa94C0Db47230d2B9c`) — Base
-- **CLAWD** (`0x9f86dB9fc6f7c9408e8Fda3Ff8ce4e78ac7a6b07`) — Base
-- **YARR** (`0x309792e8950405f803c0e3f2c9083bdff4466ba3`) — Base
+After claiming (WETH + YARR):
+1. **Sell all claimed YARR for WETH** — reduces volatility exposure
+2. **Split total WETH 25% each into:**
+   - **RED** (`0x2e662015a501f066e043d64d04f77ffe551a4b07`) — Base
+   - **WBTC** (`0x0555E30da8f98308EdB960aa94C0Db47230d2B9c`) — Base  
+   - **CLAWD** (`0x9f86dB9fc6f7c9408e8Fda3Ff8ce4e78ac7a6b07`) — Base
+   - **WETH** — Reserve for gas + stability
+
+**Why no YARR in the split?** YARR is volatile. We already earn YARR exposure through LP fees — converting to stable assets locks in gains from that volatility.
 
 ## Historical Claims
 
