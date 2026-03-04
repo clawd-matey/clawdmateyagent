@@ -48,6 +48,12 @@ AGENT_ID  = os.environ.get("ONECLAW_AGENT_ID", "")
 API_KEY   = os.environ.get("ONECLAW_API_KEY", "")
 API_BASE  = "https://api.1claw.xyz/v1"
 
+# ── Swap safety settings ───────────────────────────────────────────────────────
+SLIPPAGE_PCT      = float(os.environ.get("SLIPPAGE_PCT", "2.0"))       # Max slippage tolerance (%)
+MAX_GAS_GWEI      = float(os.environ.get("MAX_GAS_GWEI", "50"))        # Skip if gas > this (gwei)
+RETRY_ATTEMPTS    = int(os.environ.get("RETRY_ATTEMPTS", "3"))         # Retry failed txs
+RETRY_DELAY_SEC   = int(os.environ.get("RETRY_DELAY_SEC", "10"))       # Delay between retries
+
 # ── Chain config ───────────────────────────────────────────────────────────────
 CHAINS = {
     "base": {
@@ -301,17 +307,45 @@ def bridge_weth_to_arbitrum(account, amount_wei):
     log(f"Bridge deposit TX on Base: {bridge_tx} — funds will arrive on Arbitrum asynchronously.")
 
 
-def send_tx(w3, account, tx):
-    tx["nonce"] = w3.eth.get_transaction_count(account.address)
-    tx["gas"]   = w3.eth.estimate_gas({**tx, "from": account.address})
-    signed = account.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-    log(f"TX sent: {tx_hash.hex()} — waiting...")
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-    if receipt["status"] != 1:
-        fail(f"TX reverted: {tx_hash.hex()}")
-    log(f"TX confirmed in block {receipt['blockNumber']}")
-    return tx_hash.hex()
+def check_gas_price(w3):
+    """Check if gas price is acceptable. Returns (ok, current_gwei)."""
+    gas_price = w3.eth.gas_price
+    current_gwei = gas_price / 1e9
+    ok = current_gwei <= MAX_GAS_GWEI
+    if not ok:
+        log(f"⚠️ Gas too high: {current_gwei:.1f} gwei > {MAX_GAS_GWEI} gwei limit")
+    else:
+        log(f"Gas price OK: {current_gwei:.1f} gwei")
+    return ok, current_gwei
+
+def send_tx(w3, account, tx, retries=None):
+    """Send transaction with retry logic."""
+    if retries is None:
+        retries = RETRY_ATTEMPTS
+    
+    last_error = None
+    for attempt in range(retries):
+        try:
+            tx["nonce"] = w3.eth.get_transaction_count(account.address)
+            tx["gas"]   = w3.eth.estimate_gas({**tx, "from": account.address})
+            signed = account.sign_transaction(tx)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            log(f"TX sent: {tx_hash.hex()} — waiting...")
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            if receipt["status"] != 1:
+                raise Exception(f"TX reverted: {tx_hash.hex()}")
+            log(f"TX confirmed in block {receipt['blockNumber']}")
+            return tx_hash.hex()
+        except Exception as e:
+            last_error = e
+            if attempt < retries - 1:
+                log(f"⚠️ Attempt {attempt + 1}/{retries} failed: {e}")
+                log(f"Retrying in {RETRY_DELAY_SEC}s...")
+                time.sleep(RETRY_DELAY_SEC)
+            else:
+                log(f"❌ All {retries} attempts failed")
+    
+    fail(f"Transaction failed after {retries} attempts: {last_error}")
 
 def ensure_approval(w3, account, token_addr, spender, amount, cfg):
     token = w3.eth.contract(address=Web3.to_checksum_address(token_addr), abi=ERC20_ABI)
@@ -411,6 +445,11 @@ def cmd_swap(args):
     chain   = tok["chain"]
     w3, cfg = connect(chain)
 
+    # Gas price check
+    gas_ok, gas_gwei = check_gas_price(w3)
+    if not gas_ok:
+        fail(f"Gas price too high ({gas_gwei:.1f} gwei > {MAX_GAS_GWEI} gwei). Skipping swap.")
+
     if symbol_in not in INPUTS[chain]:
         fail(f"{symbol_in} not supported as tokenIn on {chain}. Use: {', '.join(INPUTS[chain])}")
 
@@ -508,16 +547,55 @@ def cmd_swap(args):
     gas_price = w3.eth.gas_price
     tx_hash   = None
 
+    # Quoter for slippage calculation (Base mainnet)
+    QUOTER_ADDR = "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a"
+    QUOTER_ABI = [{
+        "name": "quoteExactInputSingle",
+        "type": "function",
+        "inputs": [{"name": "params", "type": "tuple", "components": [
+            {"name": "tokenIn", "type": "address"},
+            {"name": "tokenOut", "type": "address"},
+            {"name": "amountIn", "type": "uint256"},
+            {"name": "fee", "type": "uint24"},
+            {"name": "sqrtPriceLimitX96", "type": "uint160"},
+        ]}],
+        "outputs": [
+            {"name": "amountOut", "type": "uint256"},
+            {"name": "sqrtPriceX96After", "type": "uint160"},
+            {"name": "initializedTicksCrossed", "type": "uint32"},
+            {"name": "gasEstimate", "type": "uint256"},
+        ],
+        "stateMutability": "nonpayable",
+    }]
+    quoter = w3.eth.contract(address=Web3.to_checksum_address(QUOTER_ADDR), abi=QUOTER_ABI)
+
     for fee_tier in [3000, 500, 10000]:
         log(f"Trying fee tier {fee_tier}...")
         try:
+            # Get quote first for slippage protection
+            quote_params = (
+                Web3.to_checksum_address(token_in_addr),
+                Web3.to_checksum_address(token_out_addr),
+                amount_in,
+                fee_tier,
+                0,
+            )
+            try:
+                quote_result = quoter.functions.quoteExactInputSingle(quote_params).call()
+                expected_out = quote_result[0]
+                min_out = int(expected_out * (100 - SLIPPAGE_PCT) / 100)
+                log(f"Quote: expected {expected_out}, min {min_out} ({SLIPPAGE_PCT}% slippage)")
+            except Exception as qe:
+                log(f"Quote failed ({qe}), using 0 minOut (no slippage protection)")
+                min_out = 0
+
             params = (
                 Web3.to_checksum_address(token_in_addr),
                 Web3.to_checksum_address(token_out_addr),
                 fee_tier,
                 account.address,
                 amount_in,
-                0,
+                min_out,  # Now with slippage protection!
                 0,
             )
             tx = router.functions.exactInputSingle(params).build_transaction({
