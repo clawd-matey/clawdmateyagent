@@ -78,6 +78,11 @@ fi
 
 log "Above threshold — proceeding to claim"
 
+# Initialize counters for logging
+BOUGHT=0
+FAILED=0
+TRANSFERRED=0
+
 # ── Step 3: Claim fees ────────────────────────────────────────────────────────
 if [ "$DRY_RUN" = "true" ]; then
   log "[DRY RUN] Would claim fees from LpLockerv2"
@@ -124,9 +129,6 @@ if [ "$DRY_RUN" = "true" ]; then
   log "[DRY RUN] Would keep \$$WETH_RESERVE as WETH reserve"
 else
   log "Buying tokens sequentially (waiting for each to complete)..."
-  
-  BOUGHT=0
-  FAILED=0
   
   # Buy RED
   if buy_token "RED" "$RED_TOKEN" "$SPLIT_USD"; then
@@ -181,8 +183,6 @@ if [ "$DRY_RUN" = "true" ]; then
 else
   log "Transferring tokens to public treasury sequentially..."
   
-  TRANSFERRED=0
-  
   transfer_token "RED" "$RED_TOKEN" && TRANSFERRED=$((TRANSFERRED + 1))
   transfer_token "WBTC" "$WBTC_TOKEN" && TRANSFERRED=$((TRANSFERRED + 1))
   transfer_token "CLAWD" "$CLAWD_TOKEN" && TRANSFERRED=$((TRANSFERRED + 1))
@@ -194,3 +194,50 @@ fi
 log "═══ TREASURY BOT COMPLETE ═══"
 log "Claimed: \$$CLAIMED_USD | Swapped: \$$SWAP_USD | WETH Reserve: \$$WETH_RESERVE"
 log "Tokens sent to clawd-matey.eth"
+
+# ── Step 7: Update TRANSACTIONS.md and push to GitHub ─────────────────────────
+if [ "$DRY_RUN" = "false" ]; then
+  REPO_DIR="$(dirname "$SCRIPT_DIR")"
+  TX_LOG="$REPO_DIR/TRANSACTIONS.md"
+  TODAY=$(date +%Y-%m-%d)
+  TIME=$(TZ="America/New_York" date +"%I:%M %p EST")
+  
+  # Extract claim tx hash from log
+  CLAIM_TX=$(echo "$CLAIM_RESULT" | grep -oE "0x[a-f0-9]{64}" | head -1 || echo "unknown")
+  
+  # Build status string
+  if [ "$BOUGHT" -eq 4 ] && [ "$TRANSFERRED" -eq 4 ]; then
+    STATUS="✅ Full success"
+  elif [ "$BOUGHT" -gt 0 ]; then
+    STATUS="✅ Claim + $BOUGHT/4 buys, $TRANSFERRED/4 transfers"
+  else
+    STATUS="✅ Claim only, buys failed"
+  fi
+  
+  # Create entry
+  ENTRY="### Run: $TIME
+**Claimed:** $CLAIMED_WETH WETH (~\$$CLAIMED_USD)  
+**Claim Tx:** [${CLAIM_TX:0:9}...](https://basescan.org/tx/$CLAIM_TX)  
+**Buys:** $BOUGHT/4 | **Transfers:** $TRANSFERRED/4  
+**Status:** $STATUS
+
+"
+
+  # Check if today's header exists, if not add it
+  if ! grep -q "## $TODAY" "$TX_LOG" 2>/dev/null; then
+    # Insert after the --- line (after header)
+    sed -i '' "s/^---$/---\n\n## $TODAY\n/" "$TX_LOG"
+  fi
+  
+  # Append entry after today's date header
+  sed -i '' "/## $TODAY/a\\
+$ENTRY" "$TX_LOG"
+  
+  # Commit and push
+  cd "$REPO_DIR"
+  git add TRANSACTIONS.md
+  git commit -m "tx: $TIME - claimed $CLAIMED_WETH WETH (\$$CLAIMED_USD)" 2>/dev/null || true
+  git push origin main 2>/dev/null || log "⚠️ Failed to push tx log"
+  
+  log "📝 Transaction logged to TRANSACTIONS.md"
+fi
