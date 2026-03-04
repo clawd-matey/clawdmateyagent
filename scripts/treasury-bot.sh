@@ -207,50 +207,56 @@ TOTAL_USD="$CLAIMED_USD"
 SWAP_USD=$(echo "$TOTAL_USD" | awk '{printf "%.2f", $1 * 0.75}')
 SPLIT_USD=$(echo "$TOTAL_USD" | awk '{printf "%.2f", $1 / 4}')
 WETH_RESERVE=$(echo "$TOTAL_USD" | awk '{printf "%.2f", $1 * 0.25}')
-log "Split: \$$SPLIT_USD each to RED, WBTC, CLAWD | \$$WETH_RESERVE WETH reserve"
 
-# ── Step 7: Buy portfolio tokens (sequential, wait for each) ─────────────────
+# Calculate WETH amounts for each token (25% each)
+SPLIT_WETH=$(echo "$TOTAL_WETH" | awk '{printf "%.6f", $1 / 4}')
+log "Split: $SPLIT_WETH WETH (~\$$SPLIT_USD) each to RED, WBTC, CLAWD | $SPLIT_WETH WETH reserve"
+
+# ── Step 7: Buy portfolio tokens via uniswap-swap.py (direct, no LLM) ─────────
 buy_token() {
   local TOKEN_NAME=$1
-  local TOKEN_ADDR=$2
-  local AMOUNT_USD=$3
+  local WETH_AMOUNT=$2
   
-  log "Buying \$$AMOUNT_USD of $TOKEN_NAME..."
-  local RESULT=$(bankr "Buy \$$AMOUNT_USD worth of $TOKEN_NAME ($TOKEN_ADDR) on Base using WETH. Execute the swap and confirm the tx hash." 2>&1 || true)
+  log "Buying $TOKEN_NAME with $WETH_AMOUNT WETH via uniswap-swap.py..."
+  local RESULT=$(python3 "$SCRIPT_DIR/uniswap-swap.py" swap --token-in WETH --token-out "$TOKEN_NAME" --amount "$WETH_AMOUNT" 2>&1)
+  local EXIT_CODE=$?
   
-  # Check for success indicators
-  if echo "$RESULT" | grep -qiE "(tx|transaction|hash|success|bought|swapped|0x[a-f0-9]{64})"; then
-    log "✅ $TOKEN_NAME buy completed"
-    echo "$RESULT" | grep -oE "0x[a-f0-9]{64}" | head -1
+  log "Swap output: $RESULT"
+  
+  # Check JSON result for success
+  if echo "$RESULT" | grep -qE '"status":\s*"completed"'; then
+    local TX_HASH=$(echo "$RESULT" | grep -oE '"tx":\s*"0x[a-f0-9]{64}"' | grep -oE '0x[a-f0-9]{64}')
+    log "✅ $TOKEN_NAME buy completed: $TX_HASH"
+    echo "$TX_HASH"
     return 0
   else
-    log "⚠️ $TOKEN_NAME buy may have failed: $(echo "$RESULT" | tail -3)"
+    log "⚠️ $TOKEN_NAME buy failed: $(echo "$RESULT" | tail -3)"
     return 1
   fi
 }
 
 if [ "$DRY_RUN" = "true" ]; then
-  log "[DRY RUN] Would buy \$$SPLIT_USD each of RED, WBTC, CLAWD"
-  log "[DRY RUN] Would keep \$$WETH_RESERVE as WETH reserve"
+  log "[DRY RUN] Would buy $SPLIT_WETH WETH (~\$$SPLIT_USD) each of RED, WBTC, CLAWD"
+  log "[DRY RUN] Would keep $SPLIT_WETH WETH as reserve"
 else
-  log "Buying tokens sequentially (waiting for each to complete)..."
+  log "Buying tokens via uniswap-swap.py (direct script, no LLM)..."
   
-  # Buy RED
-  if buy_token "RED" "$RED_TOKEN" "$SPLIT_USD"; then
+  # Buy RED (uses Clanker pool routing automatically)
+  if buy_token "RED" "$SPLIT_WETH"; then
     BOUGHT=$((BOUGHT + 1))
   else
     FAILED=$((FAILED + 1))
   fi
   
-  # Buy WBTC  
-  if buy_token "WBTC" "$WBTC_TOKEN" "$SPLIT_USD"; then
+  # Buy WBTC (uses Uniswap v3)
+  if buy_token "WBTC" "$SPLIT_WETH"; then
     BOUGHT=$((BOUGHT + 1))
   else
     FAILED=$((FAILED + 1))
   fi
   
-  # Buy CLAWD
-  if buy_token "CLAWD" "$CLAWD_TOKEN" "$SPLIT_USD"; then
+  # Buy CLAWD (uses Uniswap v3)
+  if buy_token "CLAWD" "$SPLIT_WETH"; then
     BOUGHT=$((BOUGHT + 1))
   else
     FAILED=$((FAILED + 1))
@@ -262,16 +268,20 @@ fi
 # ── Step 8: Transfer tokens to public treasury (clawd-matey.eth) ──────────────
 transfer_token() {
   local TOKEN_NAME=$1
-  local TOKEN_ADDR=$2
   
-  log "Transferring $TOKEN_NAME to treasury..."
-  local RESULT=$(bankr "Send all my $TOKEN_NAME ($TOKEN_ADDR) on Base to $TREASURY_WALLET. Execute the transfer." 2>&1 || true)
+  log "Transferring all $TOKEN_NAME to treasury via uniswap-swap.py..."
+  local RESULT=$(python3 "$SCRIPT_DIR/uniswap-swap.py" transfer --token "$TOKEN_NAME" --to "$TREASURY_WALLET" --amount all 2>&1)
+  local EXIT_CODE=$?
   
-  if echo "$RESULT" | grep -qiE "(tx|transaction|hash|success|sent|transfer|0x[a-f0-9]{64})"; then
-    log "✅ $TOKEN_NAME transfer completed"
+  log "Transfer output: $RESULT"
+  
+  # Check JSON result for success
+  if echo "$RESULT" | grep -qE '"status":\s*"completed"'; then
+    local TX_HASH=$(echo "$RESULT" | grep -oE '"tx":\s*"0x[a-f0-9]{64}"' | grep -oE '0x[a-f0-9]{64}')
+    log "✅ $TOKEN_NAME transfer completed: $TX_HASH"
     return 0
   else
-    log "⚠️ $TOKEN_NAME transfer may have failed: $(echo "$RESULT" | tail -3)"
+    log "⚠️ $TOKEN_NAME transfer failed: $(echo "$RESULT" | tail -3)"
     return 1
   fi
 }
@@ -279,11 +289,11 @@ transfer_token() {
 if [ "$DRY_RUN" = "true" ]; then
   log "[DRY RUN] Would transfer all tokens to clawd-matey.eth ($TREASURY_WALLET)"
 else
-  log "Transferring tokens to public treasury sequentially..."
+  log "Transferring tokens to public treasury via uniswap-swap.py..."
   
-  transfer_token "RED" "$RED_TOKEN" && TRANSFERRED=$((TRANSFERRED + 1))
-  transfer_token "WBTC" "$WBTC_TOKEN" && TRANSFERRED=$((TRANSFERRED + 1))
-  transfer_token "CLAWD" "$CLAWD_TOKEN" && TRANSFERRED=$((TRANSFERRED + 1))
+  transfer_token "RED" && TRANSFERRED=$((TRANSFERRED + 1))
+  transfer_token "WBTC" && TRANSFERRED=$((TRANSFERRED + 1))
+  transfer_token "CLAWD" && TRANSFERRED=$((TRANSFERRED + 1))
   
   log "Transfer summary: $TRANSFERRED/3 tokens sent to treasury"
 fi
@@ -439,14 +449,10 @@ CLAWD \$${TREASURY_CLAWD_USD} | WBTC \$${TREASURY_WBTC_USD}
 
 @scallywaglabs @redbotster @cryptomastery_ @marcus_rein_"
   
-  log "Tweeting update..."
-  TWEET_RESULT=$(bird tweet "$TWEET" 2>&1 || true)
-  
-  if echo "$TWEET_RESULT" | grep -qiE "(posted|success|tweet.*id)"; then
-    log "✅ Tweeted update"
-  else
-    log "⚠️ Tweet may have failed: $(echo "$TWEET_RESULT" | tail -3)"
-  fi
+  # NOTE: Twitter posting disabled (read-only mode)
+  # Tweet content saved to log for manual posting if desired
+  log "Tweet content (not auto-posted):"
+  log "$TWEET"
 fi
 
 # ── Step 9: Update TRANSACTIONS.md and push to GitHub ─────────────────────────
