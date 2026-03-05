@@ -102,39 +102,51 @@ BOUGHT=0
 FAILED=0
 TRANSFERRED=0
 
-# ── Step 3: Claim fees ────────────────────────────────────────────────────────
+# ── Step 3: Record balances BEFORE claim ──────────────────────────────────────
+log "Recording balances before claim..."
+YARR_BEFORE=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" balance --token YARR 2>&1 | grep -oE '"balance":\s*[0-9.]+' | grep -oE '[0-9.]+' || echo "0")
+WETH_BEFORE=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" balance --token WETH 2>&1 | grep -oE '"balance":\s*[0-9.]+' | grep -oE '[0-9.]+' || echo "0")
+log "Before claim: YARR=$YARR_BEFORE, WETH=$WETH_BEFORE"
+
+# ── Step 3b: Claim fees ───────────────────────────────────────────────────────
 if [ "$DRY_RUN" = "true" ]; then
   log "[DRY RUN] Would claim fees from LpLockerv2"
   CLAIMED_WETH="$CLAIMABLE_WETH"
+  CLAIMED_YARR="$CLAIMABLE_YARR"
 else
   log "Claiming fees via Bankr..."
   CLAIM_RESULT=$(bankr "Claim all unclaimed fees from LpLockerv2 for YARR token ($YARR_TOKEN) on Base. Creator wallet is $CREATOR_WALLET. Execute the claim transaction and tell me the tx hash." 2>&1 || true)
   log "Claim result: $CLAIM_RESULT"
-  CLAIMED_WETH="$CLAIMABLE_WETH"
+  
+  # Record balances AFTER claim to calculate actual claimed amounts
+  sleep 5  # Wait for tx to settle
+  YARR_AFTER=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" balance --token YARR 2>&1 | grep -oE '"balance":\s*[0-9.]+' | grep -oE '[0-9.]+' || echo "0")
+  WETH_AFTER=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" balance --token WETH 2>&1 | grep -oE '"balance":\s*[0-9.]+' | grep -oE '[0-9.]+' || echo "0")
+  log "After claim: YARR=$YARR_AFTER, WETH=$WETH_AFTER"
+  
+  # Calculate actual claimed amounts
+  CLAIMED_YARR=$(echo "$YARR_AFTER $YARR_BEFORE" | awk '{printf "%.0f", $1 - $2}')
+  CLAIMED_WETH=$(echo "$WETH_AFTER $WETH_BEFORE" | awk '{printf "%.6f", $1 - $2}')
+  log "Actually claimed: YARR=$CLAIMED_YARR, WETH=$CLAIMED_WETH"
 fi
 
 CLAIMED_USD=$(echo "$CLAIMED_WETH $ETH_PRICE" | awk '{printf "%.2f", $1 * $2}')
 log "Claimed WETH: \$$CLAIMED_USD"
 
-# ── Step 4: Split YARR — 20% to creator, 80% to treasury ──────────────────────
+# ── Step 4: Split ONLY NEWLY CLAIMED YARR — 20% to creator, 80% to treasury ───
 YARR_TO_CREATOR="0"
 YARR_TO_TREASURY="0"
 
-# Get YARR balance in hot wallet
-HOT_WALLET=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" balance --token YARR 2>&1 | grep -oE '"balance":\s*[0-9.]+' | grep -oE '[0-9.]+' || echo "0")
-log "YARR in hot wallet: $HOT_WALLET"
+# Only split if we actually claimed YARR
+if [ "$CLAIMED_YARR" -gt 0 ] 2>/dev/null; then
+  CREATOR_YARR=$(echo "$CLAIMED_YARR $CREATOR_PCT" | awk '{printf "%.0f", $1 * $2 / 100}')
+  TREASURY_YARR=$(echo "$CLAIMED_YARR $CREATOR_YARR" | awk '{printf "%.0f", $1 - $2}')
+  log "Splitting claimed YARR: $CREATOR_YARR (20%) to creator, $TREASURY_YARR (80%) to treasury"
 
-if [ "$DRY_RUN" = "true" ]; then
-  CREATOR_YARR=$(echo "$HOT_WALLET $CREATOR_PCT" | awk '{printf "%.0f", $1 * $2 / 100}')
-  TREASURY_YARR=$(echo "$HOT_WALLET $CREATOR_YARR" | awk '{printf "%.0f", $1 - $2}')
-  log "[DRY RUN] Would send $CREATOR_YARR YARR (20%) to creator ($CREATOR_PAYOUT_WALLET)"
-  log "[DRY RUN] Would send $TREASURY_YARR YARR (80%) to treasury ($TREASURY_WALLET)"
-else
-  if [ "$HOT_WALLET" != "0" ] && [ -n "$HOT_WALLET" ]; then
-    # Calculate split
-    CREATOR_YARR=$(echo "$HOT_WALLET $CREATOR_PCT" | awk '{printf "%.0f", $1 * $2 / 100}')
-    TREASURY_YARR=$(echo "$HOT_WALLET $CREATOR_YARR" | awk '{printf "%.0f", $1 - $2}')
-    
+  if [ "$DRY_RUN" = "true" ]; then
+    log "[DRY RUN] Would send $CREATOR_YARR YARR to creator ($CREATOR_PAYOUT_WALLET)"
+    log "[DRY RUN] Would send $TREASURY_YARR YARR to treasury ($TREASURY_WALLET)"
+  else
     # Send 20% to creator
     log "Sending $CREATOR_YARR YARR (20%) to creator..."
     CREATOR_RESULT=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" transfer --token YARR --to "$CREATOR_PAYOUT_WALLET" --amount "$CREATOR_YARR" 2>&1 || true)
@@ -145,18 +157,18 @@ else
       log "⚠️ YARR to creator failed: $(echo "$CREATOR_RESULT" | tail -2)"
     fi
     
-    # Send remaining 80% to treasury
-    log "Sending remaining YARR (80%) to treasury..."
-    TREASURY_RESULT=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" transfer --token YARR --to "$TREASURY_WALLET" --amount all 2>&1 || true)
+    # Send 80% to treasury (use specific amount, not "all")
+    log "Sending $TREASURY_YARR YARR (80%) to treasury..."
+    TREASURY_RESULT=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" transfer --token YARR --to "$TREASURY_WALLET" --amount "$TREASURY_YARR" 2>&1 || true)
     if echo "$TREASURY_RESULT" | grep -qE '"status":\s*"completed"'; then
       log "✅ YARR to treasury completed"
-      YARR_TO_TREASURY="yes"
+      YARR_TO_TREASURY="$TREASURY_YARR"
     else
       log "⚠️ YARR to treasury failed: $(echo "$TREASURY_RESULT" | tail -2)"
     fi
-  else
-    log "No YARR to transfer"
   fi
+else
+  log "No new YARR claimed — skipping YARR split"
 fi
 
 # ── Step 5: Check treasury YARR balance and burn if > 5% supply ───────────────
