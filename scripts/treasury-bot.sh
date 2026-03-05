@@ -119,7 +119,8 @@ else
   log "Claim result: $CLAIM_RESULT"
   
   # Record balances AFTER claim to calculate actual claimed amounts
-  sleep 5  # Wait for tx to settle
+  log "Waiting for claim tx to settle..."
+  sleep 20  # Wait for tx to settle (Base block time ~2s, need several confirmations)
   YARR_AFTER=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" balance --token YARR 2>&1 | grep -oE '"balance":\s*[0-9.]+' | grep -oE '[0-9.]+' || echo "0")
   WETH_AFTER=$($PYTHON "$SCRIPT_DIR/uniswap-swap.py" balance --token WETH 2>&1 | grep -oE '"balance":\s*[0-9.]+' | grep -oE '[0-9.]+' || echo "0")
   log "After claim: YARR=$YARR_AFTER, WETH=$WETH_AFTER"
